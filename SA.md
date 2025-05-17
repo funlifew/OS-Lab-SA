@@ -47,11 +47,20 @@
       - [4. سیستم فایل مجازی (VFS)](#4-سیستم-فایل-مجازی-vfs)
     - [بررسی نمونه کدهای کرنل](#بررسی-نمونه-کدهای-کرنل)
       - [1. مدیریت وقفه‌ها](#1-مدیریت-وقفهها)
-   - [زبان برنامه‌نویسی C و اسمبلی در کرنل](#زبان-برنامه‌نویسی-C-و-اسمبلی-در-کرنل)
-   - [ساختار درختی کد منبع](#ساختار-درختی-کد-منبع)
-   - [استانداردهای کدنویسی](#استانداردهای-کدنویسی)
-   - [تحلیل بخش‌های کلیدی کد کرنل](#تحلیل-بخش‌های-کلیدی-کد-کرنل)
-   - [بررسی نمونه کدهای کرنل](#بررسی-نمونه-کدهای-کرنل)
+    - [صفحه‌بندی و جدول صفحات](#صفحهبندی-و-جدول-صفحات)
+    - [فضای آدرس پروسه](#فضای-آدرس-پروسه)
+    - [مدیریت حافظه نهان](#مدیریت-حافظه-نهان)
+    - [تخصیص و آزادسازی حافظه](#تخصیص-و-آزادسازی-حافظه)
+    - [صفحه گردانی](#صفحه-گردانی)
+    - [زباله‌روبی و جمع‌آوری حافظه](#زبالهروبی-و-جمعآوری-حافظه)
+  - [زمانبندی فرآیندها](#زمانبندی-فرآیندها)
+    - [فرآیندها و نخ‌ها در لینوکس](#فرآیندها-و-نخها-در-لینوکس)
+    - [الگوریتم‌های زمانبندی](#الگوریتمهای-زمانبندی)
+    - [کلاس‌های زمانبندی](#کلاسهای-زمانبندی)
+    - [زمانبند کاملاً قابل پیش‌بینی](#زمانبند-کاملاً-قابل-پیشبینی)
+    - [زمانبندی بلادرنگ](#زمانبندی-بلادرنگ)
+    - [سیاست‌های زمانبندی](#سیاستهای-زمانبندی)
+    - [توزیع بار بین پردازنده‌ها](#توزیع-بار-بین-پردازندهها)
 6. [مدیریت حافظه در کرنل لینوکس](#مدیریت-حافظه-در-کرنل-لینوکس)
    - [حافظه فیزیکی و حافظه مجازی](#حافظه-فیزیکی-و-حافظه-مجازی)
    - [صفحه‌بندی و جدول صفحات](#صفحه‌بندی-و-جدول-صفحات)
@@ -1961,3 +1970,697 @@ static irqreturn_t example_interrupt(int irq, void *dev_id)
     
     return IRQ_HANDLED;
 }
+
+## مدیریت حافظه در کرنل لینوکس
+
+مدیریت حافظه یکی از مهم‌ترین و پیچیده‌ترین وظایف هر سیستم‌عامل است. کرنل لینوکس سیستم مدیریت حافظه قدرتمندی دارد که به آن امکان می‌دهد منابع سخت‌افزاری را به طور کارآمد مدیریت کند و میان برنامه‌های مختلف تقسیم نماید. در این بخش، جنبه‌های مختلف مدیریت حافظه در کرنل لینوکس را بررسی می‌کنیم.
+
+### حافظه فیزیکی و حافظه مجازی
+
+سیستم مدیریت حافظه لینوکس بر پایه دو مفهوم اساسی حافظه فیزیکی و حافظه مجازی بنا شده است:
+
+**حافظه فیزیکی (Physical Memory):**
+حافظه فیزیکی به RAM واقعی موجود در سیستم اشاره دارد. این حافظه محدود است و باید به دقت میان فرآیندهای مختلف تقسیم شود. لینوکس حافظه فیزیکی را به صفحات (pages) تقسیم می‌کند که معمولاً اندازه هر صفحه 4 کیلوبایت است (هرچند در برخی معماری‌ها می‌تواند متفاوت باشد، مثلاً 8 کیلوبایت، 16 کیلوبایت یا حتی 2 مگابایت در برخی سیستم‌ها).
+
+**حافظه مجازی (Virtual Memory):**
+حافظه مجازی یک انتزاع است که به هر فرآیند اجازه می‌دهد فضای آدرس خود را داشته باشد، به گونه‌ای که گویی کل حافظه سیستم را در اختیار دارد. این سیستم چندین مزیت دارد:
+
+1. **جداسازی**: هر فرآیند نمی‌تواند به حافظه فرآیندهای دیگر دسترسی پیدا کند
+2. **حفاظت**: کرنل می‌تواند دسترسی به مناطق مختلف حافظه را کنترل کند
+3. **فضای آدرس بزرگتر**: فرآیندها می‌توانند فضای آدرسی بزرگتر از حافظه فیزیکی موجود داشته باشند
+4. **حافظه اشتراکی**: امکان اشتراک‌گذاری مناطق حافظه میان فرآیندها فراهم می‌شود
+
+کرنل لینوکس از واحد مدیریت حافظه (MMU) سخت‌افزاری برای ترجمه آدرس‌های مجازی به فیزیکی استفاده می‌کند. هر فرآیند جدول صفحات (page table) خود را دارد که نگاشت بین آدرس‌های مجازی و فیزیکی را نگهداری می‌کند.
+
+```c
+/**
+ * Example of page allocation in Linux kernel
+ * mm/page_alloc.c
+ */
+struct page *alloc_pages(gfp_t gfp_mask, unsigned int order)
+{
+    struct page *page;
+    
+    /* Try to allocate pages from the current node */
+    page = alloc_pages_current(gfp_mask, order);
+    
+    /* Check if allocation was successful */
+    if (unlikely(!page))
+        return NULL;
+    
+    /* If zero flag is set, clear the pages */
+    if (unlikely(gfp_mask & __GFP_ZERO))
+        clear_highpage(page);
+    
+    return page;
+}
+```
+
+### صفحه‌بندی و جدول صفحات
+
+صفحه‌بندی (Paging) مکانیزم اصلی مدیریت حافظه مجازی در لینوکس است. در این سیستم، فضای آدرس مجازی و فیزیکی به صفحات با اندازه ثابت تقسیم می‌شوند. جدول صفحات، نگاشت بین صفحات مجازی و فیزیکی را نگهداری می‌کند.
+
+در معماری‌های مدرن، جدول صفحات چند سطحی است تا بتواند فضای آدرس بزرگ را به طور کارآمد مدیریت کند. برای مثال، در معماری x86-64، لینوکس از ساختار 4 سطحی استفاده می‌کند:
+
+1. **PGD (Page Global Directory)**
+2. **PUD (Page Upper Directory)**
+3. **PMD (Page Middle Directory)**
+4. **PTE (Page Table Entry)**
+
+هر سطح از جدول، بخشی از آدرس مجازی را برای مسیریابی به سطح بعدی استفاده می‌کند. در نهایت، PTE به صفحه فیزیکی واقعی اشاره می‌کند.
+
+```c
+/**
+ * Function to translate a virtual address to physical
+ * (simplified version)
+ */
+unsigned long translate_address(unsigned long vaddr, pgd_t *pgd)
+{
+    pgd_t *pgd_entry;
+    pud_t *pud_entry;
+    pmd_t *pmd_entry;
+    pte_t *pte_entry;
+    unsigned long paddr;
+    
+    /* Get the PGD entry */
+    pgd_entry = pgd + pgd_index(vaddr);
+    if (pgd_none(*pgd_entry))
+        return -EFAULT;
+    
+    /* Get the PUD entry */
+    pud_entry = pud_offset(pgd_entry, vaddr);
+    if (pud_none(*pud_entry))
+        return -EFAULT;
+    
+    /* Get the PMD entry */
+    pmd_entry = pmd_offset(pud_entry, vaddr);
+    if (pmd_none(*pmd_entry))
+        return -EFAULT;
+    
+    /* Get the PTE entry */
+    pte_entry = pte_offset_kernel(pmd_entry, vaddr);
+    if (!pte_present(*pte_entry))
+        return -EFAULT;
+    
+    /* Compute the physical address */
+    paddr = (pte_val(*pte_entry) & PAGE_MASK) | (vaddr & ~PAGE_MASK);
+    
+    return paddr;
+}
+```
+
+### فضای آدرس پروسه
+
+هر فرآیند در لینوکس فضای آدرس مجازی خود را دارد که از طریق ساختار `mm_struct` مدیریت می‌شود. این ساختار شامل اطلاعاتی درباره تمام مناطق حافظه متعلق به فرآیند است، از جمله:
+
+- کد اجرایی (text segment)
+- داده‌های تغییرناپذیر (read-only data)
+- داده‌های تغییرپذیر (data segment)
+- پشته (stack)
+- فضای آزاد (heap)
+- کتابخانه‌های به اشتراک گذاشته شده
+- مناطق نگاشت شده با `mmap()`
+
+هر منطقه حافظه توسط یک ساختار `vm_area_struct` توصیف می‌شود که اطلاعاتی مانند آدرس شروع و پایان، مجوزهای دسترسی و پرچم‌های دیگر را نگهداری می‌کند.
+
+```c
+/**
+ * Creating a new memory mapping for a process
+ * mm/mmap.c
+ */
+unsigned long do_mmap(struct file *file, unsigned long addr,
+                     unsigned long len, unsigned long prot,
+                     unsigned long flags, unsigned long pgoff)
+{
+    struct mm_struct *mm = current->mm;
+    struct vm_area_struct *vma;
+    unsigned long ret;
+    
+    /* Various checks and validations */
+    if (len > TASK_SIZE)
+        return -ENOMEM;
+    
+    /* Round the address and length to page boundaries */
+    addr = PAGE_ALIGN(addr);
+    len = PAGE_ALIGN(len);
+    
+    /* Find a suitable region in the address space */
+    addr = get_unmapped_area(file, addr, len, pgoff, flags);
+    if (IS_ERR_VALUE(addr))
+        return addr;
+    
+    /* Create a new VMA */
+    vma = vm_area_alloc(mm);
+    if (!vma)
+        return -ENOMEM;
+    
+    /* Set up the VMA */
+    vma->vm_start = addr;
+    vma->vm_end = addr + len;
+    vma->vm_flags = calc_vm_prot_bits(prot) | calc_vm_flag_bits(flags);
+    vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
+    vma->vm_pgoff = pgoff;
+    
+    /* Link the VMA to the file if needed */
+    if (file) {
+        vma->vm_file = get_file(file);
+        if (flags & MAP_SHARED)
+            vma->vm_flags |= VM_SHARED;
+    }
+    
+    /* Insert the VMA into the process's memory regions */
+    ret = insert_vm_struct(mm, vma);
+    if (ret)
+        return ret;
+    
+    /* Update the process's memory usage statistics */
+    mm->total_vm += len >> PAGE_SHIFT;
+    
+    return addr;
+}
+```
+
+### مدیریت حافظه نهان
+
+حافظه نهان (Cache) در سیستم‌های کامپیوتری برای افزایش کارایی استفاده می‌شود. کرنل لینوکس چندین مکانیزم کش برای بهینه‌سازی دسترسی به حافظه دارد:
+
+1. **Slab Allocator**: یک لایه روی تخصیص صفحه که امکان تخصیص و آزادسازی کارآمد اشیاء کرنل با اندازه‌های متعارف را فراهم می‌کند.
+
+2. **Buffer Cache**: بافرهایی که داده‌های دستگاه‌های بلوکی را نگهداری می‌کنند تا دسترسی به آنها سریع‌تر شود.
+
+3. **Page Cache**: صفحاتی از فایل‌ها که در حافظه نگهداری می‌شوند تا دسترسی سریع‌تر به داده‌های فایل امکان‌پذیر شود.
+
+4. **dentry Cache**: کش مربوط به مدخل‌های دایرکتوری که باعث بهبود کارایی عملیات سیستم فایل می‌شود.
+
+5. **TLB (Translation Lookaside Buffer)**: یک کش سخت‌افزاری که نگاشت‌های آدرس مجازی به فیزیکی را ذخیره می‌کند تا سرعت ترجمه آدرس افزایش یابد.
+
+```c
+/**
+ * Example of slab allocator usage
+ * mm/slab.c (simplified)
+ */
+void *kmem_cache_alloc(struct kmem_cache *cachep, gfp_t flags)
+{
+    void *objp;
+    
+    /* Get an object from the cache */
+    objp = slab_alloc(cachep, flags, _RET_IP_);
+    
+    /* If needed, run the constructor on the object */
+    if (likely(objp) && unlikely(cachep->ctor))
+        cachep->ctor(objp);
+    
+    return objp;
+}
+
+void kmem_cache_free(struct kmem_cache *cachep, void *objp)
+{
+    /* Free an object back to the cache */
+    slab_free(cachep, objp, _RET_IP_);
+}
+```
+
+### تخصیص و آزادسازی حافظه
+
+تخصیص حافظه در کرنل لینوکس به چند دسته تقسیم می‌شود:
+
+1. **تخصیص صفحه**: برای تخصیص یک یا چند صفحه متوالی استفاده می‌شود (توابع `alloc_pages` و `__get_free_pages`).
+
+2. **تخصیص عمومی**: برای تخصیص حافظه به اندازه دلخواه (توابع `kmalloc` و `kfree`).
+
+3. **تخصیص اشیاء**: برای تخصیص اشیاء با اندازه ثابت (توابع `kmem_cache_alloc` و `kmem_cache_free`).
+
+4. **تخصیص حافظه پیوسته**: برای تخصیص حافظه فیزیکی پیوسته که برای برخی دستگاه‌ها لازم است (تابع `dma_alloc_coherent`).
+
+کرنل لینوکس از پرچم‌های `GFP` (Get Free Page) برای کنترل رفتار تخصیص حافظه استفاده می‌کند. مثال‌هایی از این پرچم‌ها عبارتند از:
+
+- `GFP_KERNEL`: تخصیص حافظه معمولی (ممکن است بخوابد)
+- `GFP_ATOMIC`: تخصیص حافظه در بافت‌های اتمیک مانند وقفه‌ها (نمی‌تواند بخوابد)
+- `GFP_USER`: تخصیص حافظه برای فضای کاربر
+- `GFP_DMA`: تخصیص حافظه مناسب برای DMA
+- `__GFP_ZERO`: پر کردن حافظه تخصیص یافته با صفر
+
+```c
+/**
+ * Example of different memory allocation techniques
+ */
+void memory_allocation_examples(void)
+{
+    struct page *pages;
+    void *ptr1, *ptr2, *ptr3;
+    struct kmem_cache *cache;
+    struct my_struct *obj;
+    
+    /* Page allocation - get 2^3 = 8 consecutive pages */
+    pages = alloc_pages(GFP_KERNEL, 3);
+    if (pages)
+        __free_pages(pages, 3);
+    
+    /* General purpose allocation */
+    ptr1 = kmalloc(1024, GFP_KERNEL);
+    if (ptr1)
+        kfree(ptr1);
+    
+    /* Zero-initialized memory */
+    ptr2 = kzalloc(1024, GFP_KERNEL);
+    if (ptr2)
+        kfree(ptr2);
+    
+    /* Virtually contiguous but maybe physically non-contiguous */
+    ptr3 = vmalloc(1024 * 1024);
+    if (ptr3)
+        vfree(ptr3);
+    
+    /* Object allocation with slab allocator */
+    cache = kmem_cache_create("my_cache", sizeof(struct my_struct),
+                             0, 0, NULL);
+    if (cache) {
+        obj = kmem_cache_alloc(cache, GFP_KERNEL);
+        if (obj)
+            kmem_cache_free(cache, obj);
+        kmem_cache_destroy(cache);
+    }
+}
+```
+
+### صفحه گردانی
+
+صفحه گردانی (Paging) یکی از مکانیزم‌های مهم مدیریت حافظه مجازی است. هنگامی که حافظه فیزیکی پر می‌شود، کرنل برخی صفحات کمتر استفاده شده را به دیسک منتقل می‌کند تا فضا برای صفحات جدید آزاد شود. این فرآیند "صفحه گردانی" (swapping یا paging) نامیده می‌شود.
+
+لینوکس از الگوریتم‌های پیچیده‌ای برای انتخاب صفحات برای تعویض استفاده می‌کند. این الگوریتم‌ها سعی می‌کنند صفحاتی را انتخاب کنند که در آینده نزدیک احتمال استفاده از آنها کمتر است. صفحات دستکاری شده (dirty pages) باید قبل از تعویض به دیسک نوشته شوند، در حالی که صفحات بدون تغییر می‌توانند مستقیماً آزاد شوند.
+
+```c
+/**
+ * Example of page reclaim code (simplified)
+ * mm/vmscan.c
+ */
+static unsigned long shrink_page_list(struct list_head *page_list,
+                                     struct pglist_data *pgdat,
+                                     struct scan_control *sc)
+{
+    LIST_HEAD(ret_pages);
+    LIST_HEAD(free_pages);
+    unsigned nr_reclaimed = 0;
+    
+    while (!list_empty(page_list)) {
+        struct page *page;
+        
+        /* Get a page from the list */
+        page = lru_to_page(page_list);
+        list_del(&page->lru);
+        
+        /* Try to lock the page */
+        if (!trylock_page(page))
+            continue;
+        
+        /* Skip if page is already being reclaimed */
+        if (PageWriteback(page))
+            continue;
+        
+        /* Check if page can be reclaimed */
+        if (page_referenced(page, 0, sc->target_mem_cgroup, &sc->vm_flags))
+            continue;
+        
+        /* If page is dirty, start writeback */
+        if (PageDirty(page)) {
+            start_writeback(page);
+            continue;
+        }
+        
+        /* Page is clean, can be reclaimed */
+        del_page_from_lru_list(page, lruvec, page_lru(page));
+        list_add(&page->lru, &free_pages);
+        nr_reclaimed++;
+    }
+    
+    /* Free the reclaimed pages */
+    nr_reclaimed += free_hot_cold_page_list(&free_pages, true);
+    
+    return nr_reclaimed;
+}
+```
+
+### زباله‌روبی و جمع‌آوری حافظه
+
+برخلاف زبان‌های برنامه‌نویسی سطح بالا، کرنل لینوکس به صورت مستقیم از جمع‌آوری زباله (garbage collection) خودکار پشتیبانی نمی‌کند. مدیریت حافظه به صورت دستی انجام می‌شود و توسعه‌دهندگان کرنل باید حافظه را به درستی تخصیص و آزاد کنند.
+
+با این حال، لینوکس از چندین مکانیزم برای کمک به مدیریت حافظه استفاده می‌کند:
+
+1. **شمارش ارجاع**: بسیاری از ساختارهای داده کرنل از شمارنده ارجاع استفاده می‌کنند. هر زمان که یک اشاره جدید به شیء ایجاد می‌شود، شمارنده افزایش می‌یابد و هر زمان که یک اشاره حذف می‌شود، شمارنده کاهش می‌یابد. وقتی شمارنده به صفر برسد، شیء آزاد می‌شود.
+
+2. **RCU (Read-Copy-Update)**: یک مکانیزم هم‌روندی که به خوانندگان اجازه می‌دهد بدون قفل‌گذاری به داده‌ها دسترسی داشته باشند، در حالی که نویسندگان می‌توانند همزمان داده‌ها را به‌روزرسانی کنند. پاکسازی حافظه تنها پس از یک "دوره تنفس" (grace period) زمانی که تمام خوانندگان قدیمی کار خود را تمام کرده‌اند، انجام می‌شود.
+
+3. **SLAB Allocator**: این تخصیص‌دهنده حافظه، کارایی را با استفاده مجدد از بلوک‌های حافظه برای اشیاء با اندازه مشابه بهبود می‌بخشد و می‌تواند مشکلات قطعه‌قطعه شدن حافظه را کاهش دهد.
+
+```c
+/**
+ * Example of reference counting
+ */
+struct example_obj {
+    struct kref refcount;
+    /* other members */
+};
+
+static void example_obj_release(struct kref *ref)
+{
+    struct example_obj *obj = container_of(ref, struct example_obj, refcount);
+    /* Cleanup resources */
+    kfree(obj);
+}
+
+/* Create a new object */
+struct example_obj *example_obj_create(void)
+{
+    struct example_obj *obj;
+    
+    obj = kzalloc(sizeof(*obj), GFP_KERNEL);
+    if (!obj)
+        return NULL;
+    
+    /* Initialize reference count to 1 */
+    kref_init(&obj->refcount);
+    
+    return obj;
+}
+
+/* Get a reference to the object */
+void example_obj_get(struct example_obj *obj)
+{
+    kref_get(&obj->refcount);
+}
+
+/* Release a reference to the object */
+void example_obj_put(struct example_obj *obj)
+{
+    /* If this was the last reference, the release function will be called */
+    kref_put(&obj->refcount, example_obj_release);
+}
+```
+
+## زمانبندی فرآیندها
+
+زمانبندی فرآیندها یکی از وظایف اصلی هر سیستم‌عامل است. زمانبند کرنل لینوکس مسئول تصمیم‌گیری درباره اینکه کدام فرآیند یا نخ باید در چه زمانی روی CPU اجرا شود، است. این بخش پیچیده و حیاتی از کرنل لینوکس، تأثیر مستقیمی بر کارایی، پاسخگویی و عدالت سیستم دارد.
+
+### فرآیندها و نخ‌ها در لینوکس
+
+در کرنل لینوکس، هم فرآیندها و هم نخ‌ها با ساختار داده `task_struct` نمایش داده می‌شوند که گاهی به آن "توصیف‌کننده فرآیند" (process descriptor) نیز می‌گویند. این ساختار حاوی تمام اطلاعات مورد نیاز برای مدیریت یک فرآیند یا نخ است، از جمله:
+
+- شناسه فرآیند (PID)
+- وضعیت فرآیند (در حال اجرا، آماده، خوابیده و غیره)
+- اولویت و اطلاعات زمانبندی
+- اشاره‌گرهایی به ساختارهای داده مربوط به حافظه، فایل‌های باز و غیره
+- آمار و اطلاعات حسابداری
+
+در لینوکس، نخ‌ها تنها فرآیندهایی هستند که فضای آدرس و برخی منابع دیگر را به اشتراک می‌گذارند. از دیدگاه زمانبند، تفاوت چندانی بین فرآیندها و نخ‌ها وجود ندارد و هر دو به عنوان "task" مدیریت می‌شوند.
+
+```c
+/**
+ * Simplified version of the task_struct structure
+ * include/linux/sched.h
+ */
+struct task_struct {
+    /* Task state (TASK_RUNNING, TASK_INTERRUPTIBLE, etc.) */
+    long state;
+    
+    /* Process identification */
+    pid_t pid;
+    pid_t tgid;
+    
+    /* Scheduling information */
+    int prio, static_prio, normal_prio;
+    unsigned int rt_priority;
+    struct sched_entity se;
+    struct sched_rt_entity rt;
+    struct sched_dl_entity dl;
+    unsigned int policy;
+    
+    /* Process hierarchy */
+    struct task_struct *parent;
+    struct list_head children;
+    struct list_head sibling;
+    
+    /* Memory management */
+    struct mm_struct *mm, *active_mm;
+    
+    /* File system info */
+    struct fs_struct *fs;
+    struct files_struct *files;
+    
+    /* Signal handlers */
+    struct signal_struct *signal;
+    struct sighand_struct *sighand;
+    sigset_t blocked, real_blocked;
+    
+    /* ... many more fields ... */
+};
+```
+
+### الگوریتم‌های زمانبندی
+
+کرنل لینوکس از چندین الگوریتم زمانبندی مختلف پشتیبانی می‌کند که هر کدام برای سناریوهای خاصی بهینه شده‌اند. سه الگوریتم اصلی عبارتند از:
+
+1. **زمانبند کاملاً عادلانه (CFS - Completely Fair Scheduler)**: 
+   زمانبند پیش‌فرض برای فرآیندهای معمولی. این زمانبند سعی می‌کند زمان پردازنده را به طور عادلانه بین تمام فرآیندها تقسیم کند، با در نظر گرفتن اولویت آنها.
+
+2. **زمانبند بلادرنگ (RT - Real-Time Scheduler)**:
+   برای فرآیندهای بلادرنگ نرم که نیاز به پاسخگویی قابل پیش‌بینی دارند. این فرآیندها همیشه اولویت بالاتری نسبت به فرآیندهای معمولی دارند.
+
+3. **زمانبند ضرب‌الاجل (DL - Deadline Scheduler)**:
+   برای فرآیندهایی که باید کار مشخصی را در زمان مشخصی به پایان برسانند. این زمانبند از الگوریتم زمانبندی ضرب‌الاجل استفاده می‌کند که برای سیستم‌های بلادرنگ سخت مناسب است.
+
+هر فرآیند با یکی از سیاست‌های زمانبندی زیر اجرا می‌شود که مشخص می‌کند کدام الگوریتم برای آن استفاده شود:
+
+- `SCHED_NORMAL` (یا `SCHED_OTHER`): زمانبندی معمولی با CFS
+- `SCHED_BATCH`: مشابه NORMAL، اما برای فرآیندهای دسته‌ای که نیاز به پاسخگویی ندارند
+- `SCHED_IDLE`: برای فرآیندهایی با کمترین اولویت
+- `SCHED_FIFO`: زمانبندی بلادرنگ first-in, first-out
+- `SCHED_RR`: زمانبندی بلادرنگ round-robin
+- `SCHED_DEADLINE`: زمانبندی ضرب‌الاجل
+
+```c
+/**
+ * Example of setting a process's scheduling policy
+ */
+#include <sched.h>
+
+int set_process_scheduling_policy(pid_t pid, int policy, int priority)
+{
+    struct sched_param param;
+    
+    /* Set the priority (for SCHED_FIFO and SCHED_RR) */
+    param.sched_priority = priority;
+    
+    /* Change the scheduling policy and priority */
+    return sched_setscheduler(pid, policy, &param);
+}
+```
+
+### کلاس‌های زمانبندی
+
+زمانبند لینوکس به صورت ماژولار طراحی شده است، به طوری که پیاده‌سازی‌های مختلف زمانبندی می‌توانند به عنوان "کلاس‌های زمانبندی" پیاده‌سازی شوند. هر کلاس زمانبندی باید یک مجموعه عملیات خاص را پیاده‌سازی کند که توسط زمانبند اصلی فراخوانی می‌شوند.
+
+کلاس‌های زمانبندی به صورت سلسله مراتبی مرتب شده‌اند، به طوری که کلاس‌های با اولویت بالاتر همیشه ابتدا برای انتخاب فرآیند بعدی برای اجرا بررسی می‌شوند:
+
+1. **کلاس زمانبندی ضرب‌الاجل (dl_sched_class)**
+2. **کلاس زمانبندی بلادرنگ (rt_sched_class)**
+3. **کلاس زمانبندی کاملاً عادلانه (fair_sched_class)**
+4. **کلاس زمانبندی کاربران پیش‌زمینه (idle_sched_class)**
+
+```c
+/**
+ * Structure defining a scheduling class
+ * kernel/sched/sched.h
+ */
+struct sched_class {
+    /* These methods are called from the main scheduler */
+    const struct sched_class *next;
+    
+    /* Functions required by the scheduler */
+    void (*enqueue_task) (struct rq *rq, struct task_struct *p, int flags);
+    void (*dequeue_task) (struct rq *rq, struct task_struct *p, int flags);
+    void (*yield_task) (struct rq *rq);
+    
+    void (*check_preempt_curr) (struct rq *rq, struct task_struct *p, int flags);
+    
+    struct task_struct *(*pick_next_task) (struct rq *rq,
+                                          struct task_struct *prev);
+    
+    void (*put_prev_task) (struct rq *rq, struct task_struct *p);
+    void (*set_curr_task) (struct rq *rq);
+    void (*task_tick) (struct rq *rq, struct task_struct *p, int queued);
+    
+    /* ... more methods ... */
+};
+```
+
+### زمانبند کاملاً قابل پیش‌بینی
+
+زمانبند کاملاً عادلانه (CFS) که در نسخه 2.6.23 کرنل لینوکس معرفی شد، پیاده‌سازی زمانبند پیش‌فرض برای فرآیندهای معمولی است. این زمانبند بر اساس یک مفهوم ساده استوار است: هر فرآیند باید مقدار عادلانه‌ای از زمان CPU را دریافت کند.
+
+CFS از یک درخت سرخ-سیاه (red-black tree) برای مرتب‌سازی فرآیندها بر اساس "زمان اجرای مجازی" (virtual runtime یا vruntime) آنها استفاده می‌کند. فرآیندی که کمترین vruntime را داشته باشد (یعنی کمترین زمان CPU را تا به حال دریافت کرده است)، بالاترین اولویت را برای اجرا دارد.
+
+ویژگی‌های کلیدی CFS:
+
+1. **عدالت**: هدف اصلی تقسیم عادلانه زمان CPU بین فرآیندها است.
+2. **بهره‌وری**: CFS با استفاده از ساختارهای داده کارآمد، وظیفه زمانبندی را با پیچیدگی زمانی O(log n) انجام می‌دهد.
+3. **مقیاس‌پذیری**: برای هر CPU یک صف جداگانه وجود دارد که به مقیاس‌پذیری در سیستم‌های چندپردازنده‌ای کمک می‌کند.
+4. **پاسخگویی**: علی‌رغم تمرکز بر عدالت، CFS پاسخگویی مناسبی را برای فرآیندهای تعاملی فراهم می‌کند.
+
+```c
+/**
+ * Simplified version of CFS's pick_next_task function
+ * kernel/sched/fair.c
+ */
+static struct task_struct *pick_next_task_fair(struct rq *rq, struct task_struct *prev)
+{
+    struct cfs_rq *cfs_rq = &rq->cfs;
+    struct sched_entity *se;
+    
+    if (!cfs_rq->nr_running)
+        return NULL;
+    
+    /* Get the leftmost (lowest vruntime) entity from the red-black tree */
+    se = pick_next_entity(cfs_rq, NULL);
+    if (!se)
+        return NULL;
+    
+    /* Convert the scheduling entity to its task */
+    return task_of(se);
+}
+```
+
+### زمانبندی بلادرنگ
+
+زمانبند بلادرنگ (RT) لینوکس برای فرآیندهایی طراحی شده است که نیاز به پاسخگویی قابل پیش‌بینی دارند. این زمانبند دو سیاست را پیاده‌سازی می‌کند:
+
+1. **SCHED_FIFO**: فرآیندها به ترتیب ورود اجرا می‌شوند و هر فرآیند تا زمانی که خودش تصمیم به واگذاری CPU نگیرد یا به حالت خواب برود، به اجرا ادامه می‌دهد.
+
+2. **SCHED_RR**: مشابه FIFO است، با این تفاوت که هر فرآیند تنها برای یک کوانتوم زمانی مشخص اجرا می‌شود و سپس به انتهای صف فرآیندهای هم‌اولویت خود منتقل می‌شود.
+
+هر فرآیند بلادرنگ یک عدد اولویت استاتیک بین 1 (کمترین) تا 99 (بیشترین) دارد. فرآیندهای بلادرنگ همیشه اولویت بالاتری نسبت به فرآیندهای معمولی دارند.
+
+```c
+/**
+ * Simplified version of RT's pick_next_task function
+ * kernel/sched/rt.c
+ */
+static struct task_struct *pick_next_task_rt(struct rq *rq)
+{
+    struct rt_prio_array *array = &rq->rt.active;
+    struct rt_rq *rt_rq = &rq->rt;
+    struct task_struct *p;
+    
+    /* If no RT tasks, return NULL */
+    if (!rt_rq->rt_nr_running)
+        return NULL;
+    
+    /* Find the highest priority non-empty queue */
+    idx = sched_find_first_bit(array->bitmap);
+    
+    /* Get the first task from that queue */
+    list_for_each_entry(p, &array->queue[idx], rt.run_list) {
+        if (p->on_rq && p->prio == idx) {
+            return p;
+        }
+    }
+    
+    return NULL;
+}
+```
+
+### سیاست‌های زمانبندی
+
+لینوکس از چندین سیاست زمانبندی پشتیبانی می‌کند که نحوه مدیریت فرآیندها توسط زمانبند را مشخص می‌کنند:
+
+1. **SCHED_NORMAL (یا SCHED_OTHER)**: سیاست پیش‌فرض برای فرآیندهای معمولی. از الگوریتم CFS استفاده می‌کند.
+
+2. **SCHED_BATCH**: برای فرآیندهای دسته‌ای (batch) که نیاز به پاسخگویی فوری ندارند. این فرآیندها برای بهینه‌سازی توان عملیاتی (throughput) زمانبندی می‌شوند.
+
+3. **SCHED_IDLE**: برای فرآیندهای با اولویت بسیار پایین که تنها زمانی باید اجرا شوند که CPU بیکار است.
+
+4. **SCHED_FIFO**: یک سیاست بلادرنگ که در آن فرآیندها به ترتیب ورود اجرا می‌شوند و تا زمان تکمیل یا بلوکه شدن، CPU را رها نمی‌کنند.
+
+5. **SCHED_RR**: سیاست بلادرنگ Round-Robin که مشابه FIFO است، اما با محدودیت زمانی برای هر فرآیند.
+
+6. **SCHED_DEADLINE**: برای فرآیندهایی که باید تا یک ضرب‌الاجل مشخص کار خود را تمام کنند. این فرآیندها با سه پارامتر مشخص می‌شوند: زمان اجرا، ضرب‌الاجل نسبی و دوره تناوب.
+
+کاربران معمولی می‌توانند با استفاده از تابع سیستمی `sched_setscheduler()` یا از طریق ابزارهایی مانند `chrt` سیاست زمانبندی یک فرآیند را تغییر دهند، اما معمولاً تنها کاربر ریشه (root) می‌تواند سیاست‌های بلادرنگ را تنظیم کند.
+
+```c
+/**
+ * System call implementation for setting scheduler policy
+ * kernel/sched/core.c
+ */
+SYSCALL_DEFINE3(sched_setscheduler, pid_t, pid, int, policy,
+               struct sched_param __user *, param)
+{
+    struct sched_param lparam;
+    struct task_struct *p;
+    
+    if (!param || pid < 0)
+        return -EINVAL;
+    
+    if (copy_from_user(&lparam, param, sizeof(struct sched_param)))
+        return -EFAULT;
+    
+    /* Find the task */
+    p = find_process_by_pid(pid);
+    if (!p)
+        return -ESRCH;
+    
+    /* Check permissions */
+    if (!capable(CAP_SYS_NICE))
+        return -EPERM;
+    
+    /* Set the scheduling policy */
+    return sched_setscheduler(p, policy, &lparam);
+}
+```
+
+### توزیع بار بین پردازنده‌ها
+
+در سیستم‌های چندپردازنده‌ای، توزیع بار (load balancing) بین CPU ها یک جنبه مهم از زمانبندی است. هدف این است که بار کاری به طور متعادل بین همه CPU ها توزیع شود تا از منابع سیستم به طور بهینه استفاده شود.
+
+زمانبند لینوکس از چندین راهبرد برای توزیع بار استفاده می‌کند:
+
+1. **توزیع بار دوره‌ای**: در فواصل زمانی منظم، زمانبند بار کاری هر CPU را بررسی می‌کند و در صورت نیاز، فرآیندها را بین آنها جابجا می‌کند.
+
+2. **توزیع بار در زمان ساخت فرآیند**: هنگام ایجاد یک فرآیند جدید، زمانبند سعی می‌کند آن را روی CPU با کمترین بار قرار دهد.
+
+3. **توزیع بار هنگام بیدار شدن فرآیند**: وقتی یک فرآیند از حالت خواب خارج می‌شود، ممکن است روی CPU دیگری با بار کمتر قرار گیرد.
+
+4. **گروه‌های عادلانه**: سیستم گروه‌بندی فرآیندها که اجازه می‌دهد منابع CPU به طور عادلانه بین گروه‌های مختلف فرآیندها تقسیم شود.
+
+5. **دامنه‌های توزیع بار**: برای مقیاس‌پذیری بهتر در سیستم‌های بزرگ، توزیع بار در سطوح مختلف (CPU ها، هسته‌ها، گره‌های NUMA) انجام می‌شود.
+
+لینوکس همچنین از ویژگی‌های سخت‌افزاری مانند SMT (Simultaneous Multi-Threading) و NUMA (Non-Uniform Memory Access) آگاه است و سعی می‌کند تصمیمات زمانبندی خود را بر اساس توپولوژی سیستم بهینه کند.
+
+```c
+/**
+ * Simplified load balancing function
+ * kernel/sched/fair.c
+ */
+static int load_balance(int this_cpu, struct rq *this_rq,
+                       struct sched_domain *sd, enum cpu_idle_type idle)
+{
+    int nr_moved = 0;
+    struct rq *busiest;
+    
+    /* Find the busiest CPU in this scheduling domain */
+    busiest = find_busiest_queue(sd, this_cpu, idle);
+    if (!busiest)
+        return 0;
+    
+    /* Don't bother balancing if the difference is too small */
+    if (!busiest->nr_running ||
+        busiest->nr_running <= this_rq->nr_running + 1)
+        return 0;
+    
+    /* Try to move tasks from the busiest CPU to this CPU */
+    nr_moved = move_tasks(this_rq, this_cpu, busiest, sd);
+    
+    return nr_moved;
+}
+```
+
+با این مکانیزم توزیع بار و سایر اجزای توصیف شده، زمانبند فرآیندهای لینوکس استفاده کارآمد از منابع CPU، توزیع عادلانه زمان پردازنده بین فرآیندها و پشتیبانی از سناریوهای مختلف کاربری - از برنامه‌های تعاملی تا سیستم‌های بلادرنگ و سرورهای با بار بالا - را تضمین می‌کند.
