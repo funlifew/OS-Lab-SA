@@ -61,6 +61,22 @@
     - [زمانبندی بلادرنگ](#زمانبندی-بلادرنگ)
     - [سیاست‌های زمانبندی](#سیاستهای-زمانبندی)
     - [توزیع بار بین پردازنده‌ها](#توزیع-بار-بین-پردازندهها)
+  - [سیستم فایل در لینوکس](#سیستم-فایل-در-لینوکس)
+    - [معماری VFS](#معماری-vfs)
+    - [انواع سیستم فایل در لینوکس](#انواع-سیستم-فایل-در-لینوکس)
+    - [ext2، ext3 و ext4](#ext2-ext3-و-ext4)
+    - [Btrfs و ZFS](#btrfs-و-zfs)
+    - [سیستم‌های فایل شبکه](#سیستمهای-فایل-شبکه)
+    - [عملکرد ورودی/خروجی](#عملکرد-ورودیخروجی)
+    - [کش و بافر سیستم فایل](#کش-و-بافر-سیستم-فایل)
+  - [مدیریت دستگاه‌ها](#مدیریت-دستگاهها)
+    - [درایورهای دستگاه](#درایورهای-دستگاه)
+    - [سیستم‌های فایل دستگاه](#سیستمهای-فایل-دستگاه)
+    - [مدل درایور لینوکس](#مدل-درایور-لینوکس)
+    - [hotplug و پشتیبانی از اتصال داغ](#hotplug-و-پشتیبانی-از-اتصال-داغ)
+    - [مدیریت انرژی](#مدیریت-انرژی)
+    - [درایورهای گرافیکی](#درایورهای-گرافیکی)
+    - [تعامل با سخت‌افزار](#تعامل-با-سختافزار)
 6. [مدیریت حافظه در کرنل لینوکس](#مدیریت-حافظه-در-کرنل-لینوکس)
    - [حافظه فیزیکی و حافظه مجازی](#حافظه-فیزیکی-و-حافظه-مجازی)
    - [صفحه‌بندی و جدول صفحات](#صفحه‌بندی-و-جدول-صفحات)
@@ -2664,3 +2680,1093 @@ static int load_balance(int this_cpu, struct rq *this_rq,
 ```
 
 با این مکانیزم توزیع بار و سایر اجزای توصیف شده، زمانبند فرآیندهای لینوکس استفاده کارآمد از منابع CPU، توزیع عادلانه زمان پردازنده بین فرآیندها و پشتیبانی از سناریوهای مختلف کاربری - از برنامه‌های تعاملی تا سیستم‌های بلادرنگ و سرورهای با بار بالا - را تضمین می‌کند.
+
+## سیستم فایل در لینوکس
+
+یکی از ویژگی‌های قدرتمند و انعطاف‌پذیر کرنل لینوکس، سیستم فایل آن است. لینوکس از طیف گسترده‌ای از سیستم‌های فایل پشتیبانی می‌کند و یک ساختار انتزاعی قدرتمند به نام VFS (Virtual File System) را برای یکپارچه‌سازی آنها ارائه می‌دهد. در این بخش، اجزای مختلف سیستم فایل لینوکس را بررسی می‌کنیم.
+
+### معماری VFS
+
+سیستم فایل مجازی (VFS) یک لایه انتزاعی در کرنل لینوکس است که واسط یکپارچه‌ای برای تعامل با انواع مختلف سیستم‌های فایل فراهم می‌کند. این معماری به برنامه‌های کاربردی اجازه می‌دهد تا با استفاده از یک سری فراخوانی‌های سیستمی استاندارد، به سیستم‌های فایل متنوع دسترسی داشته باشند، بدون آنکه نیاز به آگاهی از جزئیات پیاده‌سازی آنها داشته باشند.
+
+**اجزای اصلی VFS:**
+
+1. **Superblock**: نماینده یک سیستم فایل نصب شده است و اطلاعات کلی آن را نگهداری می‌کند.
+2. **Inode**: نماینده یک فایل منحصر به فرد است و ویژگی‌های آن را ذخیره می‌کند.
+3. **Dentry**: نماینده یک مدخل دایرکتوری است که ارتباط بین نام فایل و inode را برقرار می‌کند.
+4. **File**: نماینده یک فایل باز شده توسط یک فرآیند است.
+
+VFS از یک مدل شیء‌گرا استفاده می‌کند که در آن هر سیستم فایل خاص، توابع عملیاتی خود را برای رسیدگی به اشیاء VFS پیاده‌سازی می‌کند.
+
+```c
+/**
+ * ساختارهای داده اصلی VFS در کرنل لینوکس
+ * include/linux/fs.h
+ */
+
+/* ساختار Superblock که اطلاعات سیستم فایل را نگهداری می‌کند */
+struct super_block {
+    struct file_system_type *s_type;
+    struct dentry *s_root;
+    struct super_operations *s_op;
+    unsigned long s_magic;
+    dev_t s_dev;
+    // دیگر فیلدها...
+};
+
+/* ساختار Inode که اطلاعات یک فایل را نگهداری می‌کند */
+struct inode {
+    umode_t i_mode;
+    uid_t i_uid;
+    gid_t i_gid;
+    dev_t i_rdev;
+    loff_t i_size;
+    struct timespec i_atime, i_mtime, i_ctime;
+    struct inode_operations *i_op;
+    struct file_operations *i_fop;
+    struct super_block *i_sb;
+    // دیگر فیلدها...
+};
+
+/* ساختار Dentry که ارتباط بین نام فایل و inode را برقرار می‌کند */
+struct dentry {
+    struct inode *d_inode;
+    struct dentry *d_parent;
+    struct qstr d_name;
+    struct dentry_operations *d_op;
+    // دیگر فیلدها...
+};
+
+/* ساختار File که نماینده یک فایل باز شده است */
+struct file {
+    struct path f_path;
+    struct inode *f_inode;
+    const struct file_operations *f_op;
+    loff_t f_pos;
+    unsigned int f_flags;
+    // دیگر فیلدها...
+};
+```
+
+**عملیات VFS:**
+
+VFS عملیات خود را از طریق ساختارهایی مانند `super_operations`، `inode_operations` و `file_operations` انجام می‌دهد. این ساختارها شامل اشاره‌گرهایی به توابعی هستند که برای هر سیستم فایل خاص پیاده‌سازی می‌شوند.
+
+```c
+/**
+ * عملیات فایل در VFS
+ * include/linux/fs.h
+ */
+struct file_operations {
+    ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
+    ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
+    long (*unlocked_ioctl) (struct file *, unsigned int, unsigned long);
+    int (*mmap) (struct file *, struct vm_area_struct *);
+    int (*open) (struct inode *, struct file *);
+    int (*release) (struct inode *, struct file *);
+    // دیگر توابع...
+};
+```
+
+### انواع سیستم فایل در لینوکس
+
+لینوکس از تعداد زیادی سیستم فایل پشتیبانی می‌کند که می‌توان آنها را به چندین دسته تقسیم کرد:
+
+1. **سیستم‌های فایل محلی**: برای ذخیره‌سازی داده روی دیسک‌های محلی استفاده می‌شوند.
+   - ext2, ext3, ext4
+   - XFS
+   - Btrfs
+   - F2FS
+   - JFS
+   - ReiserFS
+
+2. **سیستم‌های فایل شبکه**: برای دسترسی به فایل‌های ذخیره شده روی سرورهای راه دور استفاده می‌شوند.
+   - NFS (Network File System)
+   - CIFS (Common Internet File System)
+   - AFS (Andrew File System)
+
+3. **سیستم‌های فایل ویژه**: برای اهداف خاص استفاده می‌شوند.
+   - procfs: دسترسی به اطلاعات فرآیندها و کرنل
+   - sysfs: دسترسی به اطلاعات سیستم و پیکربندی
+   - tmpfs: سیستم فایل موقت در حافظه
+   - devfs/udev: مدیریت فایل‌های دستگاه
+
+4. **سیستم‌های فایل فشرده**: برای دسترسی به فایل‌های فشرده بدون نیاز به استخراج آنها.
+   - squashfs
+   - cramfs
+
+5. **سیستم‌های فایل رمزگذاری شده**: برای ذخیره‌سازی امن داده‌ها.
+   - eCryptfs
+   - LUKS/dm-crypt
+
+### ext2، ext3 و ext4
+
+خانواده Extended File System (ext) طی سال‌ها سیستم‌های فایل استاندارد در بسیاری از توزیع‌های لینوکس بوده‌اند. این سیستم‌های فایل نسل به نسل تکامل یافته‌اند تا قابلیت‌های بیشتر، کارایی بهتر و اطمینان‌پذیری بالاتری را فراهم کنند.
+
+**ext2:**
+- سیستم فایل ابتدایی لینوکس بدون قابلیت ژورنالینگ
+- ساختار ساده و کارآمد
+- مناسب برای رسانه‌های با تعداد نوشتن محدود مانند کارت‌های SD و حافظه‌های فلش
+
+**ext3:**
+- نسخه بهبود یافته ext2 با قابلیت ژورنالینگ
+- ژورنالینگ باعث افزایش اطمینان‌پذیری می‌شود و از آسیب دیدن فایل‌سیستم در صورت قطع ناگهانی برق جلوگیری می‌کند
+- سازگاری کامل با ext2
+
+**ext4:**
+- توسعه داده شده در سال 2008 به عنوان جانشین ext3
+- پشتیبانی از فایل‌ها و پارتیشن‌های بسیار بزرگ (تا 16 تربایت)
+- تخصیص حافظه اختصاصی برای کاهش قطعه‌قطعه شدن
+- تأخیر در تخصیص بلوک برای بهبود کارایی
+- چک‌سام‌های داده و ژورنال برای افزایش اطمینان‌پذیری
+- نگاشت مستقیم برای فایل‌های بزرگ
+
+```c
+/**
+ * ساختار بلوک super در ext4
+ * fs/ext4/ext4.h
+ */
+struct ext4_super_block {
+    __le32  s_inodes_count;         /* تعداد inodeها */
+    __le32  s_blocks_count_lo;      /* تعداد بلوک‌ها */
+    __le32  s_r_blocks_count_lo;    /* تعداد بلوک‌های رزرو شده */
+    __le32  s_free_blocks_count_lo; /* تعداد بلوک‌های آزاد */
+    __le32  s_free_inodes_count;    /* تعداد inodeهای آزاد */
+    __le32  s_first_data_block;     /* اولین بلوک داده */
+    __le32  s_log_block_size;       /* لگاریتم 2 از اندازه بلوک */
+    __le32  s_log_cluster_size;     /* لگاریتم 2 از اندازه خوشه */
+    __le32  s_blocks_per_group;     /* تعداد بلوک‌ها در هر گروه */
+    __le32  s_clusters_per_group;   /* تعداد خوشه‌ها در هر گروه */
+    __le32  s_inodes_per_group;     /* تعداد inodeها در هر گروه */
+    // دیگر فیلدها...
+};
+```
+
+### Btrfs و ZFS
+
+Btrfs (B-tree File System) و ZFS دو سیستم فایل پیشرفته هستند که ویژگی‌های نسل جدید را ارائه می‌دهند، مانند نسخه‌برداری از داده‌ها، اسنپ‌شات، RAID نرم‌افزاری و چک‌سام‌های داده.
+
+**Btrfs:**
+- توسط Oracle توسعه داده شده و به عنوان "باتر‌اف‌اس" تلفظ می‌شود
+- طراحی شده برای رفع محدودیت‌های سیستم‌های فایل قدیمی‌تر
+- قابلیت‌های کلیدی شامل:
+  - اسنپ‌شات‌های قابل نوشتن
+  - زیرحجم‌ها (Subvolumes)
+  - RAID نرم‌افزاری داخلی
+  - فشرده‌سازی
+  - تدبیر (deduplication)
+  - چک‌سام‌های داده برای تشخیص خرابی‌ها
+
+**ZFS:**
+- در اصل توسط Sun Microsystems برای Solaris توسعه یافته
+- معماری مبتنی بر استخر ذخیره‌سازی (storage pool)
+- قابلیت‌های کلیدی شامل:
+  - اعتبارسنجی و خودترمیمی داده‌ها
+  - اسنپ‌شات‌ها و کلون‌ها
+  - فشرده‌سازی
+  - تدبیر
+  - رمزگذاری
+  - ظرفیت ذخیره‌سازی بسیار بالا
+
+به دلیل مسائل مربوط به مجوز، ZFS به طور پیش‌فرض در هسته لینوکس قرار ندارد و معمولاً باید به صورت ماژول جداگانه نصب شود.
+
+### سیستم‌های فایل شبکه
+
+سیستم‌های فایل شبکه امکان دسترسی به فایل‌های ذخیره شده روی سرورهای راه دور را فراهم می‌کنند. لینوکس از چندین سیستم فایل شبکه محبوب پشتیبانی می‌کند:
+
+**NFS (Network File System):**
+- توسط Sun Microsystems توسعه داده شده
+- رایج‌ترین سیستم فایل شبکه در محیط‌های UNIX/Linux
+- از پروتکل RPC (Remote Procedure Call) استفاده می‌کند
+- نسخه‌های مختلف: NFSv2, NFSv3, NFSv4
+- ویژگی‌های NFSv4 شامل:
+  - احراز هویت و رمزگذاری بهبود یافته
+  - بهبود عملکرد در شبکه‌های WAN
+  - پشتیبانی از استیت‌فول (stateful) بودن
+  - تجمیع چندین فراخوانی روال در یک عملیات
+
+**CIFS/SMB:**
+- Common Internet File System/Server Message Block
+- استفاده شده توسط Windows برای اشتراک‌گذاری فایل
+- در لینوکس توسط پروژه Samba پیاده‌سازی شده
+- قابلیت‌ها:
+  - احراز هویت و کنترل دسترسی Windows
+  - یکپارچه‌سازی با دامنه‌های Windows
+  - اشتراک‌گذاری چاپگر
+
+**SSHFS:**
+- سیستم فایل بر پایه SFTP
+- امکان نصب سیستم فایل راه دور از طریق SSH
+- مزایا:
+  - امنیت بالا (رمزگذاری)
+  - سادگی راه‌اندازی (نیاز به نصب هیچ سرویس اضافی ندارد)
+  - عبور از فایروال‌ها (معمولاً پورت SSH باز است)
+
+```c
+/**
+ * مثالی از کد کرنل لینوکس برای NFS
+ * fs/nfs/nfs4proc.c
+ */
+static int nfs4_do_open(struct inode *inode, struct file *filp, int flags)
+{
+    struct nfs_open_context *ctx;
+    struct nfs4_state *state = NULL;
+    struct nfs4_opendata *opendata;
+    int ret;
+    
+    ctx = nfs_open_context_alloc();
+    if (!ctx)
+        return -ENOMEM;
+    
+    opendata = nfs4_opendata_alloc(filp->f_path.dentry, ctx);
+    if (!opendata) {
+        ret = -ENOMEM;
+        goto out;
+    }
+    
+    /* انجام عملیات باز کردن NFSv4 */
+    ret = _nfs4_do_open(opendata);
+    if (ret)
+        goto out_opendata;
+    
+    state = opendata->state;
+    ret = nfs4_opendata_check_status(opendata);
+    if (ret)
+        goto out_opendata;
+    
+    /* تنظیم حالت فایل و دیگر داده‌های مرتبط */
+    ctx->state = state;
+    filp->private_data = ctx;
+    
+out_opendata:
+    nfs4_opendata_put(opendata);
+out:
+    if (ret)
+        nfs_free_open_context(ctx);
+    return ret;
+}
+```
+
+### عملکرد ورودی/خروجی
+
+سیستم ورودی/خروجی (I/O) لینوکس مسئول مدیریت درخواست‌های خواندن و نوشتن به دستگاه‌های ذخیره‌سازی است. این سیستم شامل چندین لایه است که هر کدام وظایف خاصی را انجام می‌دهند:
+
+**لایه VFS:**
+- واسط یکپارچه برای دسترسی به سیستم‌های فایل
+- ارائه فراخوانی‌های سیستمی استاندارد: open(), read(), write(), close() و غیره
+- مدیریت حافظه کش برای فایل‌ها (Page Cache)
+
+**لایه سیستم فایل:**
+- تبدیل درخواست‌های سطح بالا به عملیات سطح بلوک
+- مدیریت ساختار منطقی سیستم فایل (دایرکتوری‌ها، inodeها و غیره)
+
+**لایه Generic Block Layer:**
+- برنامه‌ریزی درخواست‌های I/O
+- ادغام و مرتب‌سازی درخواست‌ها برای بهینه‌سازی عملکرد
+- سیستم I/O صف‌بندی شده (I/O Schedulers)
+
+**لایه درایور بلوکی:**
+- تعامل مستقیم با سخت‌افزار ذخیره‌سازی
+- پیاده‌سازی پروتکل‌های خاص سخت‌افزار (SATA, SCSI, NVMe و غیره)
+
+**برنامه‌ریزهای I/O (I/O Schedulers):**
+
+لینوکس از چندین برنامه‌ریز I/O پشتیبانی می‌کند که هر کدام برای سناریوهای خاصی بهینه شده‌اند:
+
+1. **CFQ (Completely Fair Queuing)**: تلاش می‌کند زمان I/O را به طور عادلانه بین فرآیندها تقسیم کند. مناسب برای workstation.
+2. **Deadline**: برای کاهش زمان پاسخ طراحی شده و ضرب‌الاجل‌هایی برای خواندن و نوشتن تنظیم می‌کند. مناسب برای سرورهای پایگاه داده.
+3. **NOOP**: ساده‌ترین برنامه‌ریز که ادغام درخواست‌های مجاور را انجام می‌دهد اما مرتب‌سازی پیچیده انجام نمی‌دهد. مناسب برای دستگاه‌های فلش و درایوهای SSD.
+4. **BFQ (Budget Fair Queuing)**: به هر فرآیند بودجه I/O اختصاص می‌دهد. برای سیستم‌هایی با انواع مختلف بار کاری مناسب است.
+
+```c
+/**
+ * نمونه ساده‌ای از کد برنامه‌ریز I/O
+ * block/deadline-iosched.c (ساده شده)
+ */
+static int deadline_dispatch(struct request_queue *q, int force)
+{
+    struct deadline_data *dd = q->elevator->elevator_data;
+    struct request *rq;
+    
+    /* ابتدا سعی کن از صف‌های خواندن با ضرب‌الاجل برداری */
+    rq = deadline_check_fifo(dd, DEADLINE_READ);
+    if (rq)
+        goto dispatch;
+    
+    /* سپس صف‌های نوشتن با ضرب‌الاجل را بررسی کن */
+    rq = deadline_check_fifo(dd, DEADLINE_WRITE);
+    if (rq)
+        goto dispatch;
+    
+    /* اگر صف‌های با ضرب‌الاجل خالی بودند، از صف‌های عادی استفاده کن */
+    if (dd->next_batch == DEADLINE_BATCH_READ)
+        rq = deadline_next_request(dd, DEADLINE_READ);
+    else
+        rq = deadline_next_request(dd, DEADLINE_WRITE);
+    
+    if (!rq) {
+        /* تغییر بین خواندن و نوشتن */
+        dd->next_batch = !dd->next_batch;
+        rq = deadline_next_request(dd, dd->next_batch);
+    }
+    
+dispatch:
+    if (rq) {
+        /* درخواست را به لایه پایین‌تر ارسال کن */
+        dd->dispatched++;
+        elv_dispatch_add_tail(q, rq);
+        return 1;
+    }
+    
+    return 0;
+}
+```
+
+### کش و بافر سیستم فایل
+
+کرنل لینوکس از چندین مکانیزم کش برای بهبود عملکرد سیستم فایل استفاده می‌کند:
+
+**Page Cache:**
+- حافظه کش اصلی برای داده‌های فایل
+- صفحات خوانده شده از دیسک را در حافظه نگه می‌دارد
+- خواندن‌ها و نوشتن‌های بعدی به همان داده می‌توانند بدون دسترسی به دیسک انجام شوند
+- کاهش قابل توجه زمان دسترسی به داده‌ها
+- از الگوریتم LRU (Least Recently Used) برای مدیریت حافظه استفاده می‌کند
+
+**Buffer Cache:**
+- کش برای بلوک‌های دیسک (بیشتر برای متاداده‌های سیستم فایل)
+- در نسخه‌های جدید کرنل، Buffer Cache در Page Cache ادغام شده است
+
+**Dentry Cache:**
+- کش برای مدخل‌های دایرکتوری (dentry)
+- نگاشت بین نام‌های فایل و inodeها را ذخیره می‌کند
+- تسریع جستجوی مسیر فایل
+
+**Inode Cache:**
+- کش برای inodeهای پر استفاده
+- اطلاعات متاداده فایل‌ها را در حافظه نگه می‌دارد
+
+**مکانیزم‌های نوشتن:**
+
+برای نوشتن داده‌های تغییر یافته از Page Cache به دیسک، کرنل لینوکس از چندین استراتژی استفاده می‌کند:
+
+1. **نوشتن همزمان (Synchronous Write)**: داده‌ها بلافاصله به دیسک نوشته می‌شوند.
+2. **نوشتن با تأخیر (Delayed Write)**: داده‌های تغییر یافته در حافظه نگهداری می‌شوند و در زمان مناسب‌تری به دیسک نوشته می‌شوند.
+3. **نوشتن دوره‌ای (Periodic Write)**: دیمون `pdflush` یا `kworker` (در کرنل‌های جدیدتر) به طور دوره‌ای داده‌های تغییر یافته را به دیسک می‌نویسد.
+4. **نوشتن پیش‌گیرانه (Writeback)**: سیستم به طور خودکار و بر اساس فشار حافظه، داده‌های تغییر یافته را به دیسک می‌نویسد.
+
+```c
+/**
+ * نمونه‌ای از کد مرتبط با Page Cache
+ * mm/filemap.c
+ */
+void do_generic_file_read(struct file *filp, loff_t *ppos, 
+                          struct kiocb *iocb, struct iov_iter *iter)
+{
+    struct address_space *mapping = filp->f_mapping;
+    pgoff_t index = *ppos >> PAGE_SHIFT;
+    struct page *page;
+    int ret;
+    
+    /* سعی کن صفحه را از Page Cache بیابی */
+    page = find_get_page(mapping, index);
+    if (!page) {
+        /* صفحه در کش نیست، آن را از دیسک بخوان */
+        page = page_cache_alloc_cold(mapping);
+        if (!page)
+            return -ENOMEM;
+        
+        /* صفحه را از دیسک بخوان */
+        ret = mapping->a_ops->readpage(filp, page);
+        if (ret) {
+            put_page(page);
+            return ret;
+        }
+        
+        /* صفحه را به Page Cache اضافه کن */
+        add_to_page_cache_lru(page, mapping, index, GFP_KERNEL);
+    }
+    
+    /* داده را از صفحه به فضای کاربر کپی کن */
+    copy_page_to_iter(page, 0, PAGE_SIZE, iter);
+    
+    put_page(page);
+    return 0;
+}
+```
+
+سیستم فایل در لینوکس یک طراحی پیچیده، انعطاف‌پذیر و کارآمد است که به کرنل اجازه می‌دهد از انواع مختلف رسانه‌های ذخیره‌سازی، سیستم‌های فایل و پروتکل‌های شبکه پشتیبانی کند. لایه VFS نقش کلیدی در ارائه یک واسط یکپارچه بازی می‌کند، در حالی که مکانیزم‌های کش و برنامه‌ریزی I/O، عملکرد را بهبود می‌بخشند.
+
+## مدیریت دستگاه‌ها
+
+مدیریت دستگاه‌ها در کرنل لینوکس یکی از وظایف اصلی و پیچیده‌ای است که این سیستم‌عامل را قادر می‌سازد با انواع مختلف سخت‌افزارها تعامل داشته باشد. لینوکس از یک مدل مبتنی بر درایور استفاده می‌کند که انتزاع سطح بالایی از سخت‌افزار فراهم می‌کند و به برنامه‌های کاربردی اجازه می‌دهد بدون نیاز به دانستن جزئیات سخت‌افزار، با دستگاه‌ها ارتباط برقرار کنند.
+
+### درایورهای دستگاه
+
+درایورهای دستگاه، ماژول‌های کرنلی هستند که عملکرد یک دستگاه سخت‌افزاری خاص را کنترل می‌کنند. آنها واسط بین سخت‌افزار و بقیه کرنل هستند و وظیفه ترجمه درخواست‌های سطح بالا به دستورات خاص سخت‌افزار را بر عهده دارند.
+
+**انواع درایورهای دستگاه در لینوکس:**
+
+1. **درایورهای کاراکتری (Character Drivers)**:
+   - برای دستگاه‌هایی که داده را به صورت جریانی از بایت‌ها منتقل می‌کنند
+   - دسترسی به داده به صورت متوالی (sequential)
+   - مثال‌ها: پورت‌های سریال، کیبورد، موس، چاپگر
+
+2. **درایورهای بلوکی (Block Drivers)**:
+   - برای دستگاه‌های ذخیره‌سازی که داده را در بلوک‌های با اندازه ثابت ذخیره می‌کنند
+   - دسترسی به داده به صورت تصادفی (random)
+   - مثال‌ها: هارد دیسک، SSD، دیسک‌های فلش
+
+3. **درایورهای شبکه (Network Drivers)**:
+   - برای کارت‌های شبکه
+   - از واسط خاصی به نام netdevice استفاده می‌کنند
+   - مدیریت بسته‌های شبکه برای ارسال و دریافت
+
+4. **درایورهای USB**:
+   - برای مدیریت دستگاه‌های متصل به پورت USB
+   - با استفاده از چارچوب USB کرنل
+
+5. **درایورهای گرافیکی**:
+   - برای کارت‌های گرافیک و نمایشگرها
+   - از چارچوب‌های DRM (Direct Rendering Manager)، KMS (Kernel Mode Setting) و Framebuffer استفاده می‌کنند
+
+```c
+/**
+ * مثالی از یک درایور کاراکتری ساده
+ * درایورهای کاراکتری از ساختار file_operations استفاده می‌کنند
+ */
+static struct file_operations simple_driver_fops = {
+    .owner = THIS_MODULE,
+    .open = simple_open,
+    .read = simple_read,
+    .write = simple_write,
+    .release = simple_release,
+};
+
+/* ثبت درایور در سیستم */
+static int __init simple_init(void)
+{
+    int ret;
+    
+    /* ثبت شماره major برای درایور */
+    ret = register_chrdev(SIMPLE_MAJOR, "simple", &simple_driver_fops);
+    if (ret < 0) {
+        printk(KERN_ERR "Failed to register simple driver\n");
+        return ret;
+    }
+    
+    printk(KERN_INFO "Simple driver loaded\n");
+    return 0;
+}
+
+/* خروج درایور از سیستم */
+static void __exit simple_exit(void)
+{
+    /* لغو ثبت درایور */
+    unregister_chrdev(SIMPLE_MAJOR, "simple");
+    printk(KERN_INFO "Simple driver unloaded\n");
+}
+
+module_init(simple_init);
+module_exit(simple_exit);
+```
+
+### سیستم‌های فایل دستگاه
+
+یکی از مفاهیم اساسی در لینوکس این است که "همه چیز یک فایل است". این فلسفه شامل دستگاه‌های سخت‌افزاری نیز می‌شود. لینوکس از دو سیستم فایل ویژه برای ارائه اطلاعات و کنترل دستگاه‌ها استفاده می‌کند: `/dev` و `/proc`.
+
+**/dev (Device Filesystem):**
+- حاوی فایل‌های ویژه‌ای است که دستگاه‌های سخت‌افزاری را نمایش می‌دهند
+- انواع اصلی فایل‌های دستگاه:
+  - **دستگاه‌های کاراکتری**: با حرف "c" در خروجی دستور `ls -l` مشخص می‌شوند
+  - **دستگاه‌های بلوکی**: با حرف "b" در خروجی دستور `ls -l` مشخص می‌شوند
+- هر فایل دستگاه با یک جفت عدد (major, minor) مشخص می‌شود:
+  - **Major number**: مشخص کننده درایور مورد استفاده
+  - **Minor number**: مشخص کننده یک دستگاه خاص کنترل شده توسط آن درایور
+- مدیریت `/dev` معمولاً توسط `udev` انجام می‌شود (جایگزین مدرن برای devfs)
+
+**/proc (Process Filesystem):**
+- سیستم فایل مجازی که اطلاعاتی درباره فرآیندها و کرنل ارائه می‌دهد
+- دایرکتوری‌های شماره‌دار نماینده فرآیندهای در حال اجرا هستند
+- فایل‌های متعددی اطلاعات سیستم را ارائه می‌دهند، مانند:
+  - `/proc/cpuinfo`: اطلاعات CPU
+  - `/proc/meminfo`: اطلاعات حافظه
+  - `/proc/interrupts`: آمار وقفه‌ها
+  - `/proc/devices`: لیست دستگاه‌های ثبت شده
+
+**/sys (Sysfs):**
+- سیستم فایل مجازی جدیدتر که اطلاعات بیشتری درباره دستگاه‌ها و درایورها ارائه می‌دهد
+- ساختار سلسله مراتبی با دایرکتوری‌های مختلف:
+  - `/sys/devices`: نمایش سلسله مراتب دستگاه‌های فیزیکی
+  - `/sys/bus`: اطلاعات مربوط به باس‌های سیستم
+  - `/sys/class`: دستگاه‌ها بر اساس کلاس (مثلاً، دیسک، شبکه و غیره)
+  - `/sys/block`: دستگاه‌های بلوکی
+  - `/sys/module`: ماژول‌های کرنل بارگذاری شده
+
+```bash
+# نمونه‌ای از خروجی ls -l در دایرکتوری /dev
+$ ls -l /dev/sda /dev/tty1
+brw-rw---- 1 root disk    8, 0 Jun 30 12:34 /dev/sda
+crw--w---- 1 root tty     4, 1 Jun 30 12:35 /dev/tty1
+# b نشان دهنده دستگاه بلوکی و c نشان دهنده دستگاه کاراکتری است
+# 8,0 و 4,1 اعداد major و minor هستند
+```
+
+### مدل درایور لینوکس
+
+کرنل لینوکس دارای یک مدل منسجم و چارچوب قدرتمند برای نوشتن درایورهای دستگاه است. مدل درایور لینوکس دارای چندین ویژگی کلیدی است:
+
+**1. مدل ماژولار:**
+- درایورها می‌توانند به صورت ماژول‌های قابل بارگذاری پویا پیاده‌سازی شوند
+- این امکان اضافه کردن یا حذف درایورها بدون نیاز به راه‌اندازی مجدد سیستم را فراهم می‌کند
+- ماژول‌ها با دستورات `insmod`, `modprobe` و `rmmod` مدیریت می‌شوند
+
+**2. چارچوب‌های زیرساختی:**
+- کرنل چارچوب‌های متعددی برای انواع خاصی از دستگاه‌ها ارائه می‌دهد
+- نویسندگان درایور می‌توانند از این چارچوب‌ها به جای نوشتن همه کد از ابتدا استفاده کنند
+- مثال‌ها: USB، PCI، I2C، SPI، گرافیک، شبکه و غیره
+
+**3. مدل رانشی (Driver Model):**
+- چارچوب یکپارچه برای نمایش دستگاه‌ها، درایورها و باس‌ها
+- تعریف واسط‌های استاندارد برای تعامل درایور-دستگاه
+- پشتیبانی از hotplug و مدیریت انرژی
+
+**4. مدل تطبیق درایور-دستگاه:**
+- شناسایی خودکار دستگاه‌ها توسط کرنل
+- تطبیق دستگاه‌های شناسایی شده با درایورهای مناسب
+- از شناسه‌های دستگاه (مانند شناسه‌های PCI/USB) برای این تطبیق استفاده می‌شود
+
+```c
+/**
+ * مثالی از ثبت یک درایور PCI در کرنل لینوکس
+ * drivers/example/example_driver.c
+ */
+
+/* جدول شناسه‌های PCI پشتیبانی شده توسط این درایور */
+static struct pci_device_id example_pci_ids[] = {
+    { PCI_DEVICE(0x1234, 0x5678) }, /* Vendor ID 0x1234, Device ID 0x5678 */
+    { PCI_DEVICE(0x1234, 0x9ABC) }, /* دستگاه دیگر از همان سازنده */
+    { 0, }
+};
+MODULE_DEVICE_TABLE(pci, example_pci_ids);
+
+/* تابع probe که زمانی فراخوانی می‌شود که یک دستگاه سازگار یافت شود */
+static int example_probe(struct pci_dev *pdev, const struct pci_device_id *id)
+{
+    /* مقداردهی اولیه دستگاه و تخصیص منابع */
+    /* ... */
+    return 0;
+}
+
+/* تابع remove که زمانی فراخوانی می‌شود که دستگاه حذف شود */
+static void example_remove(struct pci_dev *pdev)
+{
+    /* آزادسازی منابع و پاکسازی */
+    /* ... */
+}
+
+/* عملیات درایور PCI */
+static struct pci_driver example_driver = {
+    .name = "example",
+    .id_table = example_pci_ids,
+    .probe = example_probe,
+    .remove = example_remove,
+    .suspend = example_suspend,    /* برای مدیریت انرژی */
+    .resume = example_resume,      /* برای مدیریت انرژی */
+};
+
+/* تابع مقداردهی اولیه ماژول */
+static int __init example_init(void)
+{
+    /* ثبت درایور PCI */
+    return pci_register_driver(&example_driver);
+}
+
+/* تابع خروج ماژول */
+static void __exit example_exit(void)
+{
+    /* لغو ثبت درایور PCI */
+    pci_unregister_driver(&example_driver);
+}
+
+module_init(example_init);
+module_exit(example_exit);
+
+MODULE_AUTHOR("Example Author");
+MODULE_DESCRIPTION("Example PCI Driver");
+MODULE_LICENSE("GPL");
+```
+
+### hotplug و پشتیبانی از اتصال داغ
+
+یکی از ویژگی‌های مهم کرنل لینوکس پشتیبانی از hotplug (اتصال داغ) است، که به سیستم‌عامل اجازه می‌دهد دستگاه‌ها را در حین اجرا اضافه یا حذف کند، بدون نیاز به راه‌اندازی مجدد. این قابلیت برای فناوری‌هایی مانند USB، PCIe و SATA که اتصال و جدا کردن سخت‌افزار در حین کار را پشتیبانی می‌کنند، ضروری است.
+
+**سیستم hotplug لینوکس:**
+
+1. **شناسایی دستگاه**:
+   - وقتی یک دستگاه متصل می‌شود، کرنل به طور خودکار آن را شناسایی می‌کند
+   - اطلاعات دستگاه از طریق baس های سیستم (مانند USB، PCI) جمع‌آوری می‌شود
+
+2. **تولید رویداد**:
+   - کرنل یک رویداد uevent تولید می‌کند
+   - این رویداد حاوی اطلاعاتی درباره دستگاه جدید است
+
+3. **مدیریت رویداد**:
+   - در سیستم‌های مدرن، دیمون udev رویدادها را دریافت و پردازش می‌کند
+   - udev قوانینی را اجرا می‌کند که نحوه پیکربندی دستگاه را مشخص می‌کنند
+
+4. **بارگذاری درایور**:
+   - بر اساس اطلاعات دستگاه، درایور مناسب بارگذاری می‌شود
+   - از `modprobe` برای بارگذاری ماژول‌های کرنل استفاده می‌شود
+
+5. **ایجاد گره‌های دستگاه**:
+   - فایل‌های دستگاه مناسب در `/dev` ایجاد می‌شوند
+   - مجوزها و مالکیت این فایل‌ها تنظیم می‌شود
+
+6. **اعلام به برنامه‌های کاربردی**:
+   - سیستم‌هایی مانند D-Bus می‌توانند به برنامه‌های کاربردی اطلاع دهند که دستگاه جدیدی متصل شده است
+
+**پیاده‌سازی hotplug در درایورها:**
+
+درایورها باید برای پشتیبانی از hotplug، توابع خاصی را پیاده‌سازی کنند:
+
+- **probe()**: زمانی فراخوانی می‌شود که یک دستگاه جدید متصل شود
+- **remove()**: زمانی فراخوانی می‌شود که یک دستگاه جدا شود
+- **suspend()/resume()**: برای مدیریت انرژی (به ویژه برای دستگاه‌های قابل حمل)
+
+```c
+/**
+ * مثالی از پیاده‌سازی hotplug در یک درایور USB
+ */
+static struct usb_device_id example_usb_ids[] = {
+    { USB_DEVICE(0x1234, 0x5678) }, /* Vendor ID 0x1234, Product ID 0x5678 */
+    { }
+};
+MODULE_DEVICE_TABLE(usb, example_usb_ids);
+
+static int example_probe(struct usb_interface *interface, 
+                         const struct usb_device_id *id)
+{
+    struct example_device *dev;
+    
+    /* تخصیص ساختار داده دستگاه */
+    dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+    if (!dev)
+        return -ENOMEM;
+    
+    /* مقداردهی اولیه دستگاه */
+    dev->udev = usb_get_dev(interface_to_usbdev(interface));
+    dev->interface = interface;
+    
+    /* ذخیره اشاره‌گر به داده‌های خصوصی */
+    usb_set_intfdata(interface, dev);
+    
+    /* ثبت دستگاه کاراکتری */
+    if (register_example_device(dev) < 0) {
+        kfree(dev);
+        return -ENODEV;
+    }
+    
+    dev_info(&interface->dev, "USB Example device connected\n");
+    return 0;
+}
+
+static void example_disconnect(struct usb_interface *interface)
+{
+    struct example_device *dev;
+    
+    /* بازیابی داده‌های خصوصی */
+    dev = usb_get_intfdata(interface);
+    
+    /* حذف دستگاه از سیستم */
+    unregister_example_device(dev);
+    
+    /* پاکسازی */
+    usb_set_intfdata(interface, NULL);
+    usb_put_dev(dev->udev);
+    kfree(dev);
+    
+    dev_info(&interface->dev, "USB Example device disconnected\n");
+}
+
+static struct usb_driver example_driver = {
+    .name = "example",
+    .id_table = example_usb_ids,
+    .probe = example_probe,
+    .disconnect = example_disconnect,
+};
+
+static int __init example_init(void)
+{
+    return usb_register(&example_driver);
+}
+
+static void __exit example_exit(void)
+{
+    usb_deregister(&example_driver);
+}
+
+module_init(example_init);
+module_exit(example_exit);
+```
+
+### مدیریت انرژی
+
+مدیریت انرژی یک جنبه مهم از کرنل لینوکس، به ویژه برای دستگاه‌های قابل حمل است. کرنل لینوکس از چندین مکانیزم برای کاهش مصرف انرژی استفاده می‌کند:
+
+**1. ACPI (Advanced Configuration and Power Interface):**
+- استاندارد صنعتی برای مدیریت انرژی و پیکربندی
+- لینوکس یک پیاده‌سازی کامل از ACPI دارد
+- پشتیبانی از حالت‌های مختلف خواب سیستم (S0 تا S5)
+- مدیریت حرارتی و کنترل فن
+
+**2. CPUFreq:**
+- چارچوب مدیریت فرکانس و ولتاژ پردازنده
+- اجازه می‌دهد فرکانس پردازنده بر اساس بار سیستم تغییر کند
+- فرمانرواهای مختلف (governors) برای استراتژی‌های مختلف:
+  - **performance**: حداکثر فرکانس
+  - **powersave**: حداقل فرکانس
+  - **ondemand**: تنظیم فرکانس بر اساس استفاده از CPU
+  - **conservative**: مشابه ondemand اما با تغییرات تدریجی‌تر
+  - **schedutil**: استفاده از اطلاعات زمانبند برای تصمیم‌گیری
+
+**3. CPUIdle:**
+- مدیریت حالت‌های بیکاری (idle) پردازنده
+- انتخاب حالت بیکاری مناسب بر اساس الگوی کاری و زمان پیش‌بینی شده تا رویداد بعدی
+- پشتیبانی از حالت‌های عمیق بیکاری با مصرف کمتر انرژی
+
+**4. Runtime Power Management:**
+- مدیریت انرژی دستگاه‌ها در زمان اجرا
+- امکان خاموش کردن دستگاه‌هایی که استفاده نمی‌شوند
+- درایورها باید توابع suspend و resume را پیاده‌سازی کنند
+
+**5. Suspend to RAM / Disk:**
+- ذخیره وضعیت سیستم در RAM (suspend to RAM یا S3)
+- ذخیره وضعیت سیستم در دیسک (suspend to disk یا S4، همچنین hibernate نامیده می‌شود)
+- فرآیند منظم خاموش کردن و روشن کردن مجدد دستگاه‌ها
+
+```c
+/**
+ * مثالی از پیاده‌سازی مدیریت انرژی در یک درایور
+ */
+static int example_suspend(struct device *dev)
+{
+    struct example_device *example_dev = dev_get_drvdata(dev);
+    
+    /* ذخیره وضعیت دستگاه */
+    example_dev->saved_state = example_read_device_state(example_dev);
+    
+    /* خاموش کردن دستگاه */
+    example_disable_device(example_dev);
+    
+    /* قطع وقفه‌ها */
+    if (example_dev->irq)
+        disable_irq(example_dev->irq);
+    
+    return 0;
+}
+
+static int example_resume(struct device *dev)
+{
+    struct example_device *example_dev = dev_get_drvdata(dev);
+    
+    /* فعال کردن وقفه‌ها */
+    if (example_dev->irq)
+        enable_irq(example_dev->irq);
+    
+    /* روشن کردن دستگاه */
+    example_enable_device(example_dev);
+    
+    /* بازیابی وضعیت دستگاه */
+    example_write_device_state(example_dev, example_dev->saved_state);
+    
+    return 0;
+}
+
+static const struct dev_pm_ops example_pm_ops = {
+    .suspend = example_suspend,
+    .resume = example_resume,
+    .runtime_suspend = example_runtime_suspend,
+    .runtime_resume = example_runtime_resume,
+    .runtime_idle = example_runtime_idle,
+};
+
+static struct pci_driver example_driver = {
+    .name = "example",
+    .id_table = example_pci_ids,
+    .probe = example_probe,
+    .remove = example_remove,
+    .driver = {
+        .pm = &example_pm_ops,
+    },
+};
+```
+
+### درایورهای گرافیکی
+
+درایورهای گرافیکی در لینوکس یکی از پیچیده‌ترین انواع درایورها هستند. برای مدیریت کارت‌های گرافیکی مدرن، لینوکس از چندین زیرسیستم استفاده می‌کند:
+
+**1. DRM (Direct Rendering Manager):**
+- زیرسیستم اصلی کرنل برای مدیریت کارت‌های گرافیکی
+- فراهم کردن دسترسی کنترل شده به قابلیت‌های شتاب‌دهنده گرافیکی
+- مدیریت منابع مانند حافظه ویدئویی و موتورهای رندر
+
+**2. KMS (Kernel Mode Setting):**
+- بخشی از DRM برای تنظیم مد نمایش (رزولوشن، عمق رنگ و غیره)
+- کنترل مستقیم نمایشگر توسط کرنل به جای فضای کاربر
+- پشتیبانی از hotplug نمایشگر و پیکربندی چندین نمایشگر
+
+**3. GEM (Graphics Execution Manager):**
+- مدیریت حافظه برای اشیاء گرافیکی
+- اشتراک‌گذاری بافرهای گرافیکی بین برنامه‌های مختلف
+
+**4. TTM (Translation Table Maps):**
+- مدیریت حافظه گرافیکی پیشرفته
+- استفاده شده توسط درایورهای AMD و Nouveau
+
+**5. Framebuffer:**
+- واسط ساده‌تر و قدیمی‌تر برای دسترسی به بافر فریم
+- همچنان برای سیستم‌های نهفته و بوت استفاده می‌شود
+
+**واسط‌های فضای کاربر:**
+
+- **X.Org**: سیستم پنجره سنتی لینوکس
+- **Wayland**: سیستم ترکیب کننده جدیدتر
+- **Mesa**: پیاده‌سازی متن‌باز OpenGL، Vulkan و دیگر APIهای گرافیکی
+
+**درایورهای گرافیکی اصلی در لینوکس:**
+
+- **Intel i915**: برای GPUهای داخلی Intel
+- **AMD (amdgpu)**: برای GPUهای جدیدتر AMD
+- **NVIDIA (nouveau)**: درایور متن‌باز برای کارت‌های NVIDIA
+- **NVIDIA (proprietary)**: درایور اختصاصی NVIDIA (از طریق DKMS)
+
+```c
+/**
+ * مثالی از بخش‌های یک درایور DRM
+ * (بسیار ساده‌سازی شده)
+ */
+
+/* مقداردهی اولیه درایور DRM */
+static int example_drm_init(struct drm_device *dev)
+{
+    int ret;
+    
+    /* تنظیم قابلیت‌های DRM */
+    ret = drmm_mode_config_init(dev);
+    if (ret)
+        return ret;
+    
+    /* مقداردهی اولیه موتورهای نمایش */
+    ret = example_display_init(dev);
+    if (ret)
+        return ret;
+    
+    /* مقداردهی اولیه موتورهای رندر */
+    ret = example_render_init(dev);
+    if (ret)
+        return ret;
+    
+    /* ثبت اشیاء KMS (نمایشگرها، کانکتورها، انکودرها و غیره) */
+    ret = example_modeset_init(dev);
+    if (ret)
+        return ret;
+    
+    /* ثبت درایور DRM */
+    ret = drm_dev_register(dev, 0);
+    if (ret)
+        return ret;
+    
+    return 0;
+}
+
+/* عملیات درایور DRM */
+static const struct drm_driver example_drm_driver = {
+    .driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_RENDER,
+    .dumb_create = example_dumb_create,      /* برای framebuffer ساده */
+    .dumb_map_offset = example_dumb_map_offset,
+    .dumb_destroy = example_dumb_destroy,
+    .gem_free_object_unlocked = example_gem_free_object,
+    .gem_vm_ops = &example_gem_vm_ops,
+    .fops = &example_drm_fops,
+    .name = "example",
+    .desc = "Example Graphics Driver",
+    .date = "20230601",
+    .major = 1,
+    .minor = 0,
+};
+```
+
+### تعامل با سخت‌افزار
+
+درایورهای دستگاه در لینوکس باید با سخت‌افزار واقعی تعامل داشته باشند. کرنل لینوکس چندین راه برای این تعامل فراهم می‌کند:
+
+**1. دسترسی به پورت I/O:**
+- برای دستگاه‌های قدیمی‌تر که از فضای پورت I/O استفاده می‌کنند
+- توابع `inb()`, `outb()`, `inw()`, `outw()`, `inl()`, `outl()` برای خواندن و نوشتن در پورت‌ها
+- نیاز به درخواست مجوز برای دسترسی به پورت‌ها با `request_region()`
+
+**2. نگاشت حافظه I/O (MMIO):**
+- دستگاه‌های مدرن‌تر معمولاً از MMIO استفاده می‌کنند
+- نگاشت رجیسترهای سخت‌افزاری به فضای آدرس حافظه
+- استفاده از `ioremap()` برای نگاشت آدرس‌های فیزیکی به فضای آدرس کرنل
+- استفاده از `readb()`, `writeb()`, `readw()`, `writew()`, `readl()`, `writel()` برای دسترسی به رجیسترها
+
+**3. DMA (Direct Memory Access):**
+- برای انتقال داده‌های بزرگ بین دستگاه و حافظه اصلی
+- انتقال داده بدون درگیر کردن CPU
+- استفاده از API های DMA کرنل مانند `dma_alloc_coherent()`, `dma_map_single()`
+- مدیریت همدوسی کش (cache coherency)
+
+**4. وقفه‌ها (Interrupts):**
+- مکانیزمی برای دستگاه‌ها تا به کرنل اطلاع دهند که رویدادی رخ داده است
+- استفاده از `request_irq()` برای ثبت یک روتین وقفه
+- پیاده‌سازی یک تابع مدیریت وقفه (IRQ handler)
+
+**5. نخ‌های کرنل (Kernel Threads):**
+- برای انجام وظایف پس‌زمینه در درایور
+- ایجاد با `kthread_create()` و شروع با `wake_up_process()`
+
+```c
+/**
+ * مثال‌هایی از روش‌های مختلف تعامل با سخت‌افزار
+ */
+
+/* دسترسی به پورت I/O */
+static void example_io_port_access(void)
+{
+    unsigned long base = 0x378;  /* آدرس پورت پارالل استاندارد */
+    
+    /* درخواست مجوز برای استفاده از پورت‌ها */
+    if (!request_region(base, 3, "example_driver")) {
+        pr_err("Cannot request I/O ports\n");
+        return;
+    }
+    
+    /* نوشتن داده به پورت داده */
+    outb(0x55, base);
+    
+    /* خواندن از پورت وضعیت */
+    unsigned char status = inb(base + 1);
+    
+    /* آزاد کردن پورت‌ها */
+    release_region(base, 3);
+}
+
+/* نگاشت حافظه I/O */
+static void example_mmio_access(struct pci_dev *pdev)
+{
+    void __iomem *mmio_base;
+    resource_size_t mmio_start, mmio_len;
+    u32 value;
+    
+    /* یافتن منابع MMIO در دستگاه PCI */
+    mmio_start = pci_resource_start(pdev, 0);
+    mmio_len = pci_resource_len(pdev, 0);
+    
+    /* درخواست مجوز برای دسترسی به منابع */
+    if (!request_mem_region(mmio_start, mmio_len, "example_driver")) {
+        pr_err("Cannot request MMIO region\n");
+        return;
+    }
+    
+    /* نگاشت منابع فیزیکی به فضای آدرس کرنل */
+    mmio_base = ioremap(mmio_start, mmio_len);
+    if (!mmio_base) {
+        pr_err("Cannot map MMIO region\n");
+        release_mem_region(mmio_start, mmio_len);
+        return;
+    }
+    
+    /* خواندن از رجیستر */
+    value = readl(mmio_base + 0x10);
+    
+    /* نوشتن به رجیستر */
+    writel(0x1234, mmio_base + 0x14);
+    
+    /* پاکسازی */
+    iounmap(mmio_base);
+    release_mem_region(mmio_start, mmio_len);
+}
+
+/* استفاده از DMA */
+static void example_dma_setup(struct pci_dev *pdev)
+{
+    dma_addr_t dma_handle;
+    size_t size = 4096;  /* اندازه بافر 4KB */
+    void *cpu_addr;
+    
+    /* تخصیص بافر DMA */
+    cpu_addr = dma_alloc_coherent(&pdev->dev, size, &dma_handle, GFP_KERNEL);
+    if (!cpu_addr) {
+        pr_err("Failed to allocate DMA buffer\n");
+        return;
+    }
+    
+    /* پر کردن بافر با داده */
+    memset(cpu_addr, 0, size);
+    
+    /* تنظیم دستگاه برای استفاده از آدرس DMA */
+    writel((u32)dma_handle, mmio_base + DMA_ADDR_REG);
+    writel(size, mmio_base + DMA_SIZE_REG);
+    
+    /* شروع انتقال DMA */
+    writel(DMA_START_BIT, mmio_base + DMA_CONTROL_REG);
+    
+    /* آزادسازی بافر در زمان مناسب */
+    dma_free_coherent(&pdev->dev, size, cpu_addr, dma_handle);
+}
+
+/* مدیریت وقفه‌ها */
+static irqreturn_t example_irq_handler(int irq, void *dev_id)
+{
+    struct example_device *dev = dev_id;
+    u32 status;
+    
+    /* خواندن رجیستر وضعیت وقفه */
+    status = readl(dev->mmio_base + IRQ_STATUS_REG);
+    
+    /* اگر این وقفه برای این دستگاه نیست */
+    if (!(status & IRQ_ACTIVE_BIT))
+        return IRQ_NONE;
+    
+    /* پردازش وقفه */
+    if (status & DATA_READY_BIT)
+        example_process_data(dev);
+    
+    /* پاک کردن وقفه */
+    writel(status, dev->mmio_base + IRQ_CLEAR_REG);
+    
+    return IRQ_HANDLED;
+}
+
+/* ثبت روتین وقفه */
+static int example_setup_irq(struct example_device *dev)
+{
+    int ret;
+    
+    ret = request_irq(dev->irq, example_irq_handler,
+                     IRQF_SHARED, "example_driver", dev);
+    if (ret) {
+        pr_err("Failed to request IRQ %d\n", dev->irq);
+        return ret;
+    }
+    
+    /* فعال کردن وقفه‌ها در دستگاه */
+    writel(IRQ_ENABLE_BIT, dev->mmio_base + IRQ_CONTROL_REG);
+    
+    return 0;
+}
+```
+
+کرنل لینوکس همچنین از سیستم‌های باس متنوعی پشتیبانی می‌کند:
+
+- **PCI و PCIe**: برای کارت‌های توسعه و اجزای داخلی
+- **USB**: برای دستگاه‌های خارجی
+- **I2C**: برای ارتباط با حسگرها و دیگر دستگاه‌های کم‌سرعت
+- **SPI**: برای ارتباط سریال مزیت
+- **GPIO**: برای خطوط ورودی/خروجی دیجیتال ساده
+
+هر سیستم باس API خاص خود را برای تعامل با دستگاه‌های روی آن باس ارائه می‌دهد.
+
+مدیریت دستگاه‌ها در لینوکس یک زیرسیستم پیچیده و انعطاف‌پذیر است که امکان پشتیبانی از طیف گسترده‌ای از سخت‌افزارها را فراهم می‌کند. مدل درایور ماژولار، سیستم‌های فایل دستگاه، پشتیبانی از hotplug، مدیریت انرژی و رابط‌های متعدد برای تعامل با سخت‌افزار، همگی به توسعه آسان و کارآمد درایورها کمک می‌کنند. این معماری به لینوکس اجازه می‌دهد تا به طور مداوم با فناوری‌های سخت‌افزاری جدید سازگار شود و در انواع مختلف دستگاه‌ها از سیستم‌های نهفته گرفته تا ابررایانه‌ها استفاده شود.
